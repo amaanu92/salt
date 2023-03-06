@@ -17,7 +17,13 @@ param(
     # The version of Salt to be built. If this is not passed, the script will
     # attempt to get it from the git describe command on the Salt source
     # repo
-    [String] $Version
+    [String] $Version,
+
+    [Parameter(Mandatory=$false)]
+    [Alias("c")]
+    # Don't pretify the output of the Write-Result
+    [Switch] $CICD
+
 )
 
 #-------------------------------------------------------------------------------
@@ -33,8 +39,12 @@ $ErrorActionPreference = "Stop"
 #-------------------------------------------------------------------------------
 
 function Write-Result($result, $ForegroundColor="Green") {
-    $position = 80 - $result.Length - [System.Console]::CursorLeft
-    Write-Host -ForegroundColor $ForegroundColor ("{0,$position}$result" -f "")
+    if ( $CICD ) {
+        Write-Host $result -ForegroundColor $ForegroundColor
+    } else {
+        $position = 80 - $result.Length - [System.Console]::CursorLeft
+        Write-Host -ForegroundColor $ForegroundColor ("{0,$position}$result" -f "")
+    }
 }
 
 #-------------------------------------------------------------------------------
@@ -109,6 +119,29 @@ if ( Test-Path -Path "$NSIS_BIN" ) {
     exit 1
 }
 
+Write-Host "Getting Estimated Installation Size: " -NoNewLine
+$estimated_size = [math]::Round(((Get-ChildItem "$BUILDENV_DIR" -Recurse -Force | Measure-Object -Sum Length).Sum / 1kb))
+if ( $estimated_size -gt 0 ) {
+    Write-Result "Success" -ForegroundColor Green
+} else {
+    Write-Result "Failed" -ForegroundColor Red
+    exit 1
+}
+
+#-------------------------------------------------------------------------------
+# Copy the icon file to the build_env directory
+#-------------------------------------------------------------------------------
+
+Write-Host "Copying icon file to build env: " -NoNewline
+Copy-Item "$INSTALLER_DIR\salt.ico" "$BUILDENV_DIR" | Out-Null
+if ( Test-Path -Path "$INSTALLER_DIR\salt.ico" ) {
+    Write-Result "Success" -ForegroundColor Green
+} else {
+    Write-Result "Failed" -ForegroundColor Red
+    Write-Host "Failed to find salt.ico in build_env directory"
+    exit 1
+}
+
 #-------------------------------------------------------------------------------
 # Build the Installer
 #-------------------------------------------------------------------------------
@@ -118,6 +151,7 @@ $installer_name = "Salt-Minion-$Version-Py$($PY_VERSION.Split(".")[0])-$ARCH-Set
 Start-Process -FilePath $NSIS_BIN `
               -ArgumentList "/DSaltVersion=$Version", `
                             "/DPythonArchitecture=$ARCH", `
+                            "/DEstimatedSize=$estimated_size", `
                             "$INSTALLER_DIR\Salt-Minion-Setup.nsi" `
               -Wait -WindowStyle Hidden
 if ( Test-Path -Path "$INSTALLER_DIR\$installer_name" ) {
